@@ -1,5 +1,5 @@
 import bcrypt from "bcrypt";
-import { generateToken } from "../utils/generateToken.js";
+import { generateAccessToken, generateRefreshToken } from "../utils/generateToken.js";
 import pkg from "@prisma/client";
 const { PrismaClient } = pkg;
 
@@ -40,15 +40,22 @@ export const userRegister = async (req, res) => {
       },
     });
 
-    const token = generateToken(newUser, res);
+    const accessToken = generateAccessToken(newUser, res);
+    const refreshToken = generateRefreshToken(newUser, res);
+
+    await prisma.user.update({
+      where: { id: newUser.id },
+      data: { refreshToken: refreshToken },
+    });
 
     const userData = { ...newUser };
     delete userData.password;
+    delete userData.refreshToken;
 
     res.status(201).json({
       message: "User registered successfully",
       user: userData,
-      token: token,
+      accessToken: accessToken,
     });
   } catch (error) {
     console.error("Error saat registrasi:", error);
@@ -74,7 +81,15 @@ export const userLogin = async (req, res) => {
     if (!isPasswordValid) {
       return res.status(400).json({ message: "Invalid password" });
     }
-    const token = generateToken(user, res);
+
+    const accessToken = generateAccessToken(user, res);
+    const newRefreshToken = generateRefreshToken(user, res);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { refreshToken: newRefreshToken },
+    });
+
     const userData = {
       id: user.id,
       username: user.username,
@@ -85,11 +100,51 @@ export const userLogin = async (req, res) => {
     res.status(200).json({
       message: "Login successful",
       user: userData,
-      token: token,
+      accessToken: accessToken,
     });
   } catch (error) {
     console.error("Error when login:", error);
     res.status(500).json({ error: "Something went wrong" });
+  }
+};
+
+export const refreshAccessToken = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    
+    if (!refreshToken) {
+      return res.status(401).json({ message: "Refresh token not provided" });
+    }
+
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+
+    const user = await prisma.user.findUnique({
+      where: { username: decoded.username },
+    });
+
+    if (!user || user.refreshToken !== refreshToken) {
+      return res.status(401).json({ message: "Invalid refresh token" });
+    }
+
+    const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { refreshToken: newRefreshToken }
+    });
+
+    setTokenCookies(res, newAccessToken, newRefreshToken);
+
+    res.status(200).json({
+      message: "Token refreshed successfully"
+    });
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: "Refresh token expired" });
+    }
+    console.error("Error refreshing token:", error);
+    res.status(500).json({ error: "Token refresh failed" });
   }
 };
 

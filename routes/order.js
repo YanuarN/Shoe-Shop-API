@@ -4,4 +4,4 @@ import { authenticateToken } from "../middleware/authMiddleware.js";
 
 export const router = Router();
 
-router.post('/addOrder', addOrder, authenticateToken);
+router.post('/addOrder', authenticateToken, addOrder);
